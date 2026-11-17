@@ -1,0 +1,127 @@
+# Pod を倒せ！ https://github.com/TatsukiMinami/pod-whack
+# ゲームの画面を出す pod-whack と、倒される的の pod-whack-target の 2 つの Deployment でできている。
+# pod-whack は、自分の namespace の Pod を消す権限だけを持つ。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-whack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-whack
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-whack
+subjects:
+  - kind: ServiceAccount
+    name: pod-whack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pod-whack
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-whack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-whack
+  template:
+    metadata:
+      labels:
+        app: pod-whack
+    spec:
+      serviceAccountName: pod-whack
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: app
+          image: ghcr.io/tatsukiminami/pod-whack:0.1.0
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: TARGET_SELECTOR
+              value: app=pod-whack-target
+            # Terminating の Pod も ResourceQuota の Pod 数（10 個）に数えられるので、同時に倒せる数を絞る
+            # 画面 1 + 的 6 + Terminating 2 = 9 個
+            - name: MAX_TERMINATING
+              value: "2"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-whack-target
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: pod-whack-target
+  template:
+    metadata:
+      labels:
+        app: pod-whack-target
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: target
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 20m
+              memory: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-whack
+spec:
+  selector:
+    app: pod-whack
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: pod-whack
+spec:
+  parentRefs:
+    - name: showcase
+      namespace: gateway
+  hostnames:
+    - pod-whack.showcase.cloudnativedays.jp
+  rules:
+    - backendRefs:
+        - name: pod-whack
+          port: 80

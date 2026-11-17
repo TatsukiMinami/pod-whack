@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pod を倒せ！</title>
+<meta name="description" content="Pod を倒しても、Kubernetes がすぐに元に戻す。セルフヒーリングを体で感じるゲーム">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔨</text></svg>">
+<style>
+:root {
+  --bg: #f6f7fb;
+  --panel: #ffffff;
+  --ink: #18202f;
+  --muted: #5d6679;
+  --line: #e1e5ee;
+  --run: #2f6fe4;
+  --run-ink: #ffffff;
+  --create: #f2b01e;
+  --create-ink: #3b2a00;
+  --pending: #c9cfdb;
+  --pending-ink: #3d4554;
+  --term: #e5484d;
+  --term-ink: #ffffff;
+  --err: #8e4ec6;
+  --shadow: 0 1px 2px rgb(16 24 40 / .06), 0 4px 12px rgb(16 24 40 / .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f131a;
+    --panel: #171c25;
+    --ink: #e9edf5;
+    --muted: #9aa3b5;
+    --line: #283041;
+    --run: #4c8dff;
+    --pending: #3a4253;
+    --pending-ink: #c5ccd9;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  line-height: 1.6;
+  -webkit-tap-highlight-color: transparent;
+}
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+header h1 { margin: 0; font-size: clamp(28px, 7vw, 40px); letter-spacing: .02em; }
+header p { margin: 4px 0 0; color: var(--muted); }
+
+.stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 20px 0;
+}
+.stat {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; box-shadow: var(--shadow); min-width: 0;
+}
+.stat b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.stat span { font-size: 12px; color: var(--muted); }
+@media (max-width: 520px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+
+.board {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 6px;
+  padding: 18px 4px 28px; min-height: 260px;
+}
+.pod {
+  --w: clamp(92px, 26vw, 118px);
+  width: var(--w); height: calc(var(--w) * 1.1547);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  border: 0; padding: 0; cursor: pointer; font: inherit;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  background: var(--run); color: var(--run-ink);
+  transition: background .25s, transform .12s, opacity .4s;
+  position: relative; user-select: none;
+}
+.pod:nth-child(odd) { margin-top: calc(var(--w) * .33); }
+.pod .emoji { font-size: 30px; line-height: 1; }
+.pod .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 700; }
+.pod .stage { font-size: 11px; opacity: .9; }
+.pod:active { transform: scale(.92); }
+.pod.running:hover { filter: brightness(1.08); }
+.pod.creating { background: var(--create); color: var(--create-ink); animation: pulse 1s ease-in-out infinite; cursor: default; }
+.pod.pending { background: var(--pending); color: var(--pending-ink); cursor: default; }
+.pod.terminating { background: var(--term); color: var(--term-ink); animation: shake .35s; opacity: .55; cursor: default; }
+.pod.error { background: var(--err); color: #fff; cursor: default; }
+.pod.born { animation: pop .45s cubic-bezier(.2, 1.6, .4, 1); }
+.pod.leaving { opacity: 0; transform: scale(.6); pointer-events: none; }
+@keyframes pulse { 50% { filter: brightness(1.12); } }
+@keyframes shake {
+  20% { transform: translateX(-6px) rotate(-4deg); }
+  40% { transform: translateX(6px) rotate(4deg); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+@keyframes pop { from { transform: scale(.2); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 14px 16px; margin-top: 18px; box-shadow: var(--shadow);
+}
+.panel h2 { margin: 0 0 8px; font-size: 16px; }
+.log { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.log li { padding: 4px 0; border-top: 1px dashed var(--line); display: flex; gap: 8px; }
+.log li:first-child { border-top: 0; }
+.log time { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.log code { font-weight: 700; }
+.log .empty { color: var(--muted); }
+ol.how { margin: 0; padding-left: 1.3em; }
+ol.how li { margin: 4px 0; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px);
+  background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px;
+  font-size: 14px; opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100% - 32px);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.banner { background: var(--term); color: #fff; border-radius: 10px; padding: 8px 12px; margin-top: 12px; display: none; }
+.banner.show { display: block; }
+.burst { position: fixed; pointer-events: none; font-size: 40px; animation: burst .6s ease-out forwards; z-index: 10; }
+@keyframes burst { from { transform: translate(-50%, -50%) rotate(-30deg) scale(1.3); opacity: 1; } to { transform: translate(-50%, -110%) rotate(20deg) scale(.8); opacity: 0; } }
+footer { margin-top: 24px; font-size: 12px; color: var(--muted); text-align: center; }
+footer a { color: inherit; }
+@media (prefers-reduced-motion: reduce) { .pod, .pod.creating, .pod.terminating, .pod.born { animation: none; transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🔨 Pod を倒せ！</h1>
+    <p>青い Pod をタップして倒そう。倒しても倒しても、Kubernetes がすぐに元に戻します。</p>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <section class="stats" aria-label="スコア">
+    <div class="stat"><b id="kills">0</b><span>みんなで倒した</span></div>
+    <div class="stat"><b id="mine">0</b><span>あなたが倒した</span></div>
+    <div class="stat"><b id="last">–</b><span>直近の復活</span></div>
+    <div class="stat"><b id="best">–</b><span>最速の復活</span></div>
+  </section>
+
+  <section class="board" id="board" aria-label="Pod の一覧" aria-live="polite"></section>
+  <div class="legend">
+    <span><i style="background:var(--run)"></i>Running（倒せる）</span>
+    <span><i style="background:var(--term)"></i>Terminating</span>
+    <span><i style="background:var(--pending)"></i>Pending</span>
+    <span><i style="background:var(--create)"></i>ContainerCreating</span>
+  </div>
+
+  <section class="panel">
+    <h2>いま起きていること</h2>
+    <ul class="log" id="log"><li class="empty">Pod を倒すと、ここに流れます</li></ul>
+  </section>
+
+  <section class="panel">
+    <h2>どうして元に戻るの？</h2>
+    <ol class="how">
+      <li>タップすると、このアプリが Kubernetes の API に <code>DELETE pod</code> を送ります。</li>
+      <li>Pod の数を見張っている <b>ReplicaSet コントローラ</b>が、「6 個のはずが 5 個しかない」と気づいて、新しい Pod を作ります。</li>
+      <li><b>スケジューラ</b>が置き場所のノードを決め（Pending）、ノードの <b>kubelet</b> がコンテナを起動します（ContainerCreating）。</li>
+      <li>起動を確かめたら Running。「あるべき姿」に戻るまでの時間が、上の「復活」です。</li>
+    </ol>
+    <p style="margin:8px 0 0;color:var(--muted);font-size:13px">このアプリは自分の namespace の Pod を消す権限しか持っていません。ほかのアプリには触れないので、安心して倒してください。</p>
+  </section>
+
+  <footer>CloudNative Days WAIWAI広場 OSS Showcase ・ <a href="https://github.com/TatsukiMinami/pod-whack">ソースコード</a></footer>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const board = $("board");
+  const els = new Map(); // Pod の名前 → 要素
+  let firstRender = true;
+  let lastState = null;
+
+  const store = {
+    get() { try { return Number(localStorage.getItem("podwhack.mine")) || 0; } catch { return 0; } },
+    set(n) { try { localStorage.setItem("podwhack.mine", String(n)); } catch {} },
+  };
+  let mine = store.get();
+  $("mine").textContent = mine;
+
+  const sec = (ms) => ms ? (ms / 1000).toFixed(1) + " 秒" : "–";
+  const emoji = { running: "😀", creating: "🐣", pending: "🥚", terminating: "😵", error: "🤒" };
+  const stageText = { running: "Running", creating: "ContainerCreating", pending: "Pending", terminating: "Terminating" };
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("show"), 1600);
+  }
+
+  function burst(x, y) {
+    const b = document.createElement("div");
+    b.className = "burst";
+    b.textContent = "🔨";
+    b.style.left = x + "px";
+    b.style.top = y + "px";
+    document.body.appendChild(b);
+    setTimeout(() => b.remove(), 650);
+  }
+
+  async function kill(pod, el, ev) {
+    if (!el.classList.contains("running")) return;
+    burst(ev.clientX, ev.clientY);
+    el.classList.remove("running");
+    el.classList.add("terminating");
+    el.querySelector(".emoji").textContent = emoji.terminating;
+    el.querySelector(".stage").textContent = "Terminating";
+    try {
+      const res = await fetch("api/kill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pod }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        mine++;
+        store.set(mine);
+        $("mine").textContent = mine;
+        if (navigator.vibrate) navigator.vibrate(30);
+      } else {
+        toast(body.message || "倒せませんでした");
+        if (lastState) render(lastState); // 倒せなかったので元に戻す
+      }
+    } catch {
+      toast("通信できませんでした");
+      if (lastState) render(lastState);
+    }
+  }
+
+  function makePod(p) {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "pod";
+    el.innerHTML = '<span class="emoji"></span><span class="name"></span><span class="stage"></span>';
+    el.querySelector(".name").textContent = p.short;
+    el.title = p.name;
+    el.addEventListener("click", (ev) => kill(p.name, el, ev));
+    return el;
+  }
+
+  function render(s) {
+    lastState = s;
+    $("kills").textContent = s.kills;
+    $("last").textContent = sec(s.lastHealMs);
+    $("best").textContent = sec(s.bestHealMs);
+    const banner = $("banner");
+    banner.textContent = s.error || "";
+    banner.classList.toggle("show", !!s.error);
+
+    const seen = new Set();
+    for (const p of s.pods) {
+      seen.add(p.name);
+      let el = els.get(p.name);
+      if (!el) {
+        el = makePod(p);
+        if (!firstRender) {
+          el.classList.add("born");
+          setTimeout(() => el.classList.remove("born"), 500);
+        }
+        els.set(p.name, el);
+        board.appendChild(el);
+      }
+      for (const k of ["running", "creating", "pending", "terminating", "error"]) el.classList.toggle(k, p.stage === k);
+      el.querySelector(".emoji").textContent = emoji[p.stage] || "❔";
+      el.querySelector(".stage").textContent = stageText[p.stage] || p.reason;
+      el.disabled = p.stage !== "running";
+      el.setAttribute("aria-label", `Pod ${p.short}、${p.reason}`);
+    }
+    for (const [name, el] of els) {
+      if (!seen.has(name)) {
+        els.delete(name);
+        el.classList.add("leaving");
+        setTimeout(() => el.remove(), 400);
+      }
+    }
+    firstRender = false;
+    renderLog(s.events || []);
+  }
+
+  function renderLog(events) {
+    const log = $("log");
+    if (!events.length) return;
+    log.replaceChildren(...events.slice().reverse().map((e) => {
+      const li = document.createElement("li");
+      const t = document.createElement("time");
+      t.textContent = new Date(e.at).toLocaleTimeString("ja-JP");
+      const span = document.createElement("span");
+      const pod = `<code>${e.pod.replace(/[^a-z0-9-]/g, "")}</code>`;
+      span.innerHTML = {
+        kill: `🔨 だれかが ${pod} を倒した`,
+        gone: `💨 ${pod} が消えた`,
+        born: `🥚 ReplicaSet が ${pod} を作った`,
+        ready: `✨ ${pod} が起動` + (e.ms ? ` — 復活まで <b>${sec(e.ms)}</b>` : ""),
+      }[e.kind] || e.kind;
+      li.append(t, span);
+      return li;
+    }));
+  }
+
+  function connect() {
+    const es = new EventSource("api/events");
+    es.onmessage = (m) => { try { render(JSON.parse(m.data)); } catch {} };
+    es.onerror = () => { es.close(); setTimeout(connect, 2000); };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>
